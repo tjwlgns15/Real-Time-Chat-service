@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>실시간 채팅 서비스</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        .app { display: flex; width: 800px; height: 600px; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.12); }
+
+        /* 사이드바 */
+        .sidebar { width: 240px; border-right: 1px solid #eee; display: flex; flex-direction: column; flex-shrink: 0; }
+        .sidebar-header { padding: 12px; border-bottom: 1px solid #eee; }
+        .sidebar-header p { font-size: 11px; color: #888; margin-bottom: 6px; }
+        .user-info { display: none; align-items: center; gap: 8px; padding: 8px; background: #f8f8f8; border-radius: 8px; }
+        .avatar { width: 28px; height: 28px; border-radius: 50%; background: #dbeafe; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 500; color: #1d4ed8; flex-shrink: 0; }
+        .user-name { font-size: 12px; font-weight: 500; }
+        .conn-badge { font-size: 10px; padding: 1px 6px; border-radius: 10px; display: inline-block; margin-top: 2px; }
+        .conn-badge.connected { background: #dcfce7; color: #166534; }
+        .conn-badge.disconnected { background: #fee2e2; color: #991b1b; }
+        .conn-badge.connecting { background: #fef9c3; color: #854d0e; }
+        .tab-bar { display: flex; border-bottom: 1px solid #eee; }
+        .tab { flex: 1; font-size: 12px; padding: 8px; cursor: pointer; text-align: center; color: #888; border-bottom: 2px solid transparent; }
+        .tab.active { color: #111; border-bottom-color: #111; }
+        .room-list { flex: 1; overflow-y: auto; padding: 6px; }
+        .room-item { padding: 10px; border-radius: 8px; cursor: pointer; margin-bottom: 2px; }
+        .room-item:hover { background: #f5f5f5; }
+        .room-item.active { background: #f0f0f0; }
+        .room-item-name { font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 4px; }
+        .room-item-preview { font-size: 11px; color: #888; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .unread-badge { background: #fee2e2; color: #991b1b; font-size: 10px; padding: 1px 5px; border-radius: 10px; }
+        .sidebar-footer { padding: 8px; border-top: 1px solid #eee; display: flex; gap: 6px; }
+        .sidebar-footer button { flex: 1; font-size: 12px; padding: 6px 4px; border: 1px solid #ddd; border-radius: 8px; background: #fff; cursor: pointer; }
+        .sidebar-footer button:hover { background: #f5f5f5; }
+        .sidebar-footer button:disabled { opacity: 0.4; cursor: not-allowed; }
+        .empty-list { font-size: 12px; color: #aaa; padding: 12px; text-align: center; }
+
+        /* 채팅 영역 */
+        .chat-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+        .setup-panel { flex: 1; display: flex; align-items: center; justify-content: center; background: #fafafa; }
+        .setup-card { width: 320px; background: #fff; border: 1px solid #eee; border-radius: 12px; padding: 20px; }
+        .setup-card h3 { font-size: 15px; font-weight: 500; margin-bottom: 16px; }
+        .field { margin-bottom: 10px; }
+        .field label { font-size: 11px; color: #888; display: block; margin-bottom: 4px; }
+        .field input { width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; outline: none; }
+        .field input:focus { border-color: #888; }
+        .btn { padding: 8px 14px; border: 1px solid #ddd; border-radius: 8px; background: #fff; cursor: pointer; font-size: 13px; }
+        .btn:hover { background: #f5f5f5; }
+        .btn-primary { background: #111; color: #fff; border-color: #111; }
+        .btn-primary:hover { background: #333; }
+        .btn-row { display: flex; gap: 8px; margin-top: 4px; }
+        .btn-row .btn { flex: 1; }
+        .divider { border: none; border-top: 1px solid #eee; margin: 14px 0; }
+        .error-msg { font-size: 12px; color: #dc2626; margin-top: 8px; display: none; }
+
+        /* 채팅 패널 */
+        .chat-panel { display: none; flex-direction: column; height: 100%; }
+        .chat-header { padding: 12px 16px; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 10px; }
+        .chat-header-name { font-size: 14px; font-weight: 500; }
+        .chat-header-status { font-size: 11px; color: #888; margin-top: 1px; }
+        .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #22c55e; display: inline-block; margin-right: 3px; }
+        .messages { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+        .msg { display: flex; flex-direction: column; max-width: 70%; }
+        .msg.mine { align-self: flex-end; align-items: flex-end; }
+        .msg.theirs { align-self: flex-start; align-items: flex-start; }
+        .msg.system-msg { align-self: center; }
+        .msg-sender { font-size: 11px; color: #888; margin-bottom: 2px; }
+        .msg-bubble { padding: 8px 12px; border-radius: 14px; font-size: 13px; line-height: 1.5; word-break: break-word; }
+        .msg.mine .msg-bubble { background: #dbeafe; color: #1e3a5f; border-bottom-right-radius: 4px; }
+        .msg.theirs .msg-bubble { background: #f3f4f6; color: #111; border-bottom-left-radius: 4px; }
+        .msg.system-msg .msg-bubble { background: transparent; color: #aaa; font-size: 11px; }
+        .msg-meta { font-size: 10px; color: #bbb; margin-top: 2px; }
+        .input-area { padding: 10px 12px; border-top: 1px solid #eee; display: flex; gap: 8px; align-items: center; }
+        .input-area input { flex: 1; padding: 9px 14px; border: 1px solid #ddd; border-radius: 20px; font-size: 13px; outline: none; }
+        .input-area input:focus { border-color: #888; }
+        .send-btn { padding: 9px 18px; background: #111; color: #fff; border: none; border-radius: 20px; font-size: 13px; cursor: pointer; }
+        .send-btn:hover { background: #333; }
+
+        /* 모달 */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 100; }
+        .modal { background: #fff; border-radius: 12px; padding: 20px; width: 290px; box-shadow: 0 8px 32px rgba(0,0,0,0.16); }
+        .modal h3 { font-size: 14px; font-weight: 500; margin-bottom: 14px; }
+        .modal select { width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; margin-bottom: 10px; }
+        .modal-footer { display: flex; gap: 8px; margin-top: 14px; }
+        .modal-footer .btn { flex: 1; }
+        .checkbox-list { max-height: 120px; overflow-y: auto; border: 1px solid #eee; border-radius: 8px; padding: 6px; margin-top: 4px; }
+        .checkbox-list label { display: flex; align-items: center; gap: 6px; font-size: 13px; padding: 3px 0; cursor: pointer; }
+        .no-user-hint { font-size: 12px; color: #aaa; padding: 4px 0; }
+    </style>
+</head>
+<body>
+
+<div class="app">
+    <!-- 사이드바 -->
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <p>접속 중인 사용자</p>
+            <div class="user-info" id="user-info">
+                <div class="avatar" id="user-avatar">?</div>
+                <div>
+                    <div class="user-name" id="user-name-display">-</div>
+                    <span class="conn-badge disconnected" id="conn-badge">● 미연결</span>
+                </div>
+            </div>
+            <div class="no-user-hint" id="no-user-hint">오른쪽에서 회원을 생성하거나 로그인하세요.</div>
+        </div>
+
+        <div class="tab-bar">
+            <div class="tab active" id="tab-rooms" onclick="switchTab('rooms')">채팅방</div>
+            <div class="tab" id="tab-members" onclick="switchTab('members')">멤버</div>
+        </div>
+
+        <div class="room-list" id="room-list">
+            <div class="empty-list">채팅방이 없습니다</div>
+        </div>
+        <div class="room-list" id="member-list" style="display:none;">
+            <div class="empty-list">멤버가 없습니다</div>
+        </div>
+
+        <div class="sidebar-footer">
+            <button id="btn-dm" disabled onclick="showModal('dm')"><i class="ti ti-message"></i> DM</button>
+            <button id="btn-group" disabled onclick="showModal('group')"><i class="ti ti-users"></i> 그룹</button>
+            <button id="btn-refresh" disabled onclick="loadRooms()" title="새로고침"><i class="ti ti-refresh"></i></button>
+        </div>
+    </div>
+
+    <!-- 채팅 영역 -->
+    <div class="chat-area">
+        <!-- 로그인/회원가입 패널 -->
+        <div class="setup-panel" id="setup-panel">
+            <div class="setup-card">
+                <h3><i class="ti ti-user-plus"></i> 회원 생성 / 로그인</h3>
+
+                <div class="field">
+                    <label>Username</label>
+                    <input type="text" id="input-username" placeholder="예: user1" />
+                </div>
+                <div class="field">
+                    <label>Nickname</label>
+                    <input type="text" id="input-nickname" placeholder="예: 홍길동" />
+                </div>
+                <div class="btn-row">
+                    <button class="btn btn-primary" onclick="createMember()"><i class="ti ti-plus"></i> 회원 생성</button>
+                </div>
+
+                <hr class="divider">
+
+                <div class="field">
+                    <label>Member ID로 로그인</label>
+                    <input type="number" id="input-member-id" placeholder="Member ID 입력" />
+                </div>
+                <div class="btn-row">
+                    <button class="btn" onclick="loginWithId()"><i class="ti ti-login"></i> 로그인</button>
+                </div>
+
+                <div class="error-msg" id="setup-error"></div>
+            </div>
+        </div>
+
+        <!-- 채팅 패널 -->
+        <div class="chat-panel" id="chat-panel">
+            <div class="chat-header">
+                <div style="flex:1;">
+                    <div class="chat-header-name" id="chat-room-name">채팅방</div>
+                    <div class="chat-header-status"><span class="status-dot"></span><span id="chat-status-text">연결됨</span></div>
+                </div>
+                <button class="btn" onclick="leaveRoom()" style="font-size:12px; padding:5px 10px;"><i class="ti ti-door-exit"></i> 나가기</button>
+            </div>
+            <div class="messages" id="messages"></div>
+            <div class="input-area">
+                <input type="text" id="msg-input" placeholder="메시지를 입력하세요..." onkeydown="if(event.key==='Enter') sendMsg()" />
+                <button class="send-btn" onclick="sendMsg()"><i class="ti ti-send"></i></button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const BASE = 'http://solmitech.iptime.org:28027';
+    let currentUser = null;
+    let stompClient = null;
+    let currentRoomId = null;
+    let allMembers = [];
+    let roomSubscription = null;
+
+    // ─── 연결 상태 ────────────────────────────────────────────────────────────────
+    function setConnStatus(state) {
+        const el = document.getElementById('conn-badge');
+        el.className = 'conn-badge ' + state;
+        el.textContent = state === 'connected' ? '● 연결됨'
+            : state === 'connecting' ? '● 연결 중...'
+                : '● 미연결';
+    }
+
+    // ─── 회원 ─────────────────────────────────────────────────────────────────────
+    async function createMember() {
+        const username = document.getElementById('input-username').value.trim();
+        const nickname = document.getElementById('input-nickname').value.trim();
+        if (!username || !nickname) return showError('username과 nickname을 입력하세요.');
+        try {
+            const res = await fetch(`${BASE}/api/members`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, nickname })
+            });
+            if (!res.ok) {
+                const text = await res.text();
+                return showError('생성 실패: ' + (text || res.status));
+            }
+            loginAs(await res.json());
+        } catch (e) {
+            showError('서버 연결 실패. 서버가 실행 중인지 확인하세요.');
+        }
+    }
+
+    async function loginWithId() {
+        const id = document.getElementById('input-member-id').value.trim();
+        if (!id) return showError('Member ID를 입력하세요.');
+        try {
+            const res = await fetch(`${BASE}/api/members/${id}`);
+            if (!res.ok) return showError('회원을 찾을 수 없습니다.');
+            loginAs(await res.json());
+        } catch (e) {
+            showError('서버 연결 실패.');
+        }
+    }
+
+    function loginAs(user) {
+        currentUser = user;
+        document.getElementById('no-user-hint').style.display = 'none';
+        const ui = document.getElementById('user-info');
+        ui.style.display = 'flex';
+        document.getElementById('user-avatar').textContent = user.nickname.charAt(0);
+        document.getElementById('user-name-display').textContent = `${user.nickname} (ID: ${user.memberId})`;
+        document.getElementById('btn-dm').disabled = false;
+        document.getElementById('btn-group').disabled = false;
+        document.getElementById('btn-refresh').disabled = false;
+        document.getElementById('setup-error').style.display = 'none';
+        connectWebSocket();
+        loadRooms();
+        loadAllMembers();
+    }
+
+    function showError(msg) {
+        const el = document.getElementById('setup-error');
+        el.textContent = msg;
+        el.style.display = 'block';
+    }
+
+    // ─── WebSocket ────────────────────────────────────────────────────────────────
+    function connectWebSocket() {
+        setConnStatus('connecting');
+        const socket = new SockJS(`${BASE}/ws/chat`);
+        stompClient = Stomp.over(socket);
+        stompClient.debug = null;
+        stompClient.connect({}, () => {
+            setConnStatus('connected');
+            if (currentRoomId) subscribeRoom(currentRoomId);
+        }, () => {
+            setConnStatus('disconnected');
+            setTimeout(connectWebSocket, 3000);
+        });
+    }
+
+    function subscribeRoom(roomId) {
+        if (!stompClient || !stompClient.connected) return;
+        if (roomSubscription) roomSubscription.unsubscribe();
+        roomSubscription = stompClient.subscribe(`/topic/chat/${roomId}`, (msg) => {
+            try {
+                if (!msg.body) return;
+                const payload = JSON.parse(msg.body);
+                appendMessage(payload);
+            } catch (e) {
+                console.warn('메시지 파싱 실패:', msg.body, e);
+            }
+        });
+        stompClient.send('/app/chat/enter', {}, JSON.stringify({
+            roomId, senderId: currentUser.memberId, content: ''
+        }));
+    }
+
+    // ─── 채팅방 목록 ──────────────────────────────────────────────────────────────
+    async function loadRooms() {
+        if (!currentUser) return;
+        try {
+            const res = await fetch(`${BASE}/api/chat/rooms?memberId=${currentUser.memberId}`);
+            if (!res.ok) return;
+            renderRooms(await res.json());
+        } catch (e) {}
+    }
+
+    function renderRooms(rooms) {
+        const el = document.getElementById('room-list');
+        if (!rooms.length) {
+            el.innerHTML = '<div class="empty-list">채팅방이 없습니다</div>';
+            return;
+        }
+        el.innerHTML = rooms.map(r => `
+    <div class="room-item ${r.roomId === currentRoomId ? 'active' : ''}"
+         onclick="openRoom(${r.roomId}, ${JSON.stringify(r.name || 'DM')}, '${r.type}')">
+      <div class="room-item-name">
+        <i class="ti ${r.type === 'GROUP' ? 'ti-users' : 'ti-message'}" style="font-size:12px;"></i>
+        ${esc(r.name || 'DM')}
+        ${r.unreadMessageCount > 0 ? `<span class="unread-badge">${r.unreadMessageCount}</span>` : ''}
+      </div>
+      <div class="room-item-preview">${esc(r.lastMessage || '대화를 시작하세요')}</div>
+    </div>
+  `).join('');
+    }
+
+    // ─── 멤버 목록 ────────────────────────────────────────────────────────────────
+    async function loadAllMembers() {
+        try {
+            const res = await fetch(`${BASE}/api/members`);
+            if (!res.ok) return;
+            allMembers = await res.json();
+            renderMembers();
+        } catch (e) {}
+    }
+
+    function renderMembers() {
+        const el = document.getElementById('member-list');
+        const others = allMembers.filter(m => m.memberId !== currentUser?.memberId);
+        if (!others.length) {
+            el.innerHTML = '<div class="empty-list">다른 멤버가 없습니다</div>';
+            return;
+        }
+        el.innerHTML = others.map(m => `
+    <div class="room-item" onclick="startDmWith(${m.memberId}, ${JSON.stringify(m.nickname)})">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <div class="avatar" style="width:24px;height:24px;font-size:10px;">${esc(m.nickname.charAt(0))}</div>
+        <div>
+          <div class="room-item-name">${esc(m.nickname)}</div>
+          <div style="font-size:11px; color:#aaa;">ID: ${m.memberId}</div>
+        </div>
+      </div>
+    </div>
+  `).join('');
+    }
+
+    // ─── 채팅방 열기 ──────────────────────────────────────────────────────────────
+    async function openRoom(roomId, roomName, roomType) {
+        currentRoomId = roomId;
+        document.getElementById('setup-panel').style.display = 'none';
+        document.getElementById('chat-panel').style.display = 'flex';
+        document.getElementById('chat-room-name').textContent = roomName;
+        document.getElementById('messages').innerHTML = '';
+        subscribeRoom(roomId);
+        loadRooms();
+        try {
+            const res = await fetch(`${BASE}/api/chat/rooms/${roomId}/messages?memberId=${currentUser.memberId}`);
+            if (res.ok) {
+                const msgs = await res.json();
+                msgs.reverse().forEach(appendMessage);
+                scrollToBottom();
+            }
+        } catch (e) {}
+    }
+
+    async function startDmWith(targetId, targetName) {
+        try {
+            const res = await fetch(`${BASE}/api/chat/rooms/dm?requesterId=${currentUser.memberId}&targetId=${targetId}`, { method: 'POST' });
+            if (!res.ok) return;
+            const room = await res.json();
+            openRoom(room.roomId, `DM · ${targetName}`, 'DM');
+            switchTab('rooms');
+        } catch (e) {}
+    }
+
+    async function leaveRoom() {
+        if (!currentRoomId) return;
+        try {
+            await fetch(`${BASE}/api/chat/rooms/${currentRoomId}/members/${currentUser.memberId}`, { method: 'DELETE' });
+        } catch (e) {}
+        if (roomSubscription) { roomSubscription.unsubscribe(); roomSubscription = null; }
+        currentRoomId = null;
+        document.getElementById('chat-panel').style.display = 'none';
+        document.getElementById('setup-panel').style.display = 'flex';
+        loadRooms();
+    }
+
+    // ─── 메시지 ───────────────────────────────────────────────────────────────────
+    function sendMsg() {
+        const input = document.getElementById('msg-input');
+        const content = input.value.trim();
+        if (!content || !currentRoomId || !stompClient?.connected) return;
+        stompClient.send('/app/chat/message', {}, JSON.stringify({
+            roomId: currentRoomId,
+            senderId: currentUser.memberId,
+            content
+        }));
+        input.value = '';
+    }
+
+    function appendMessage(payload) {
+        const el = document.getElementById('messages');
+        const isMine = payload.senderId === currentUser?.memberId;
+        const isSystem = payload.type === 'SYSTEM';
+        const div = document.createElement('div');
+        div.className = `msg ${isSystem ? 'system-msg' : isMine ? 'mine' : 'theirs'}`;
+        const time = payload.createdAt
+            ? new Date(payload.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+            : '';
+        if (!isMine && !isSystem) {
+            div.innerHTML += `<div class="msg-sender">${esc(payload.senderNickname || '')}</div>`;
+        }
+        div.innerHTML += `<div class="msg-bubble">${esc(payload.content)}</div>`;
+        if (!isSystem) {
+            const unread = payload.unreadCount > 0 ? ` · ${payload.unreadCount}명 안읽음` : '';
+            div.innerHTML += `<div class="msg-meta">${time}${unread}</div>`;
+        }
+        el.appendChild(div);
+        scrollToBottom();
+    }
+
+    function scrollToBottom() {
+        const el = document.getElementById('messages');
+        el.scrollTop = el.scrollHeight;
+    }
+
+    // ─── 탭 ───────────────────────────────────────────────────────────────────────
+    function switchTab(tab) {
+        document.getElementById('tab-rooms').className = `tab ${tab === 'rooms' ? 'active' : ''}`;
+        document.getElementById('tab-members').className = `tab ${tab === 'members' ? 'active' : ''}`;
+        document.getElementById('room-list').style.display = tab === 'rooms' ? 'block' : 'none';
+        document.getElementById('member-list').style.display = tab === 'members' ? 'block' : 'none';
+        if (tab === 'members') loadAllMembers();
+    }
+
+    // ─── 모달 ─────────────────────────────────────────────────────────────────────
+    function showModal(type) {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+        if (type === 'dm') {
+            const others = allMembers.filter(m => m.memberId !== currentUser?.memberId);
+            overlay.innerHTML = `
+      <div class="modal">
+        <h3>DM 시작</h3>
+        <select id="dm-target">
+          ${others.map(m => `<option value="${m.memberId}">${esc(m.nickname)} (ID: ${m.memberId})</option>`).join('')}
+        </select>
+        <div class="modal-footer">
+          <button class="btn" onclick="this.closest('.modal-overlay').remove()">취소</button>
+          <button class="btn btn-primary" onclick="confirmDm(this)">시작</button>
+        </div>
+      </div>`;
+        } else {
+            overlay.innerHTML = `
+      <div class="modal">
+        <h3>그룹 채팅방 생성</h3>
+        <div class="field"><label>방 이름</label><input id="group-name" type="text" placeholder="방 이름 입력" /></div>
+        <div class="field">
+          <label>참여자 선택</label>
+          <div class="checkbox-list">
+            ${allMembers.filter(m => m.memberId !== currentUser?.memberId).map(m =>
+                `<label><input type="checkbox" value="${m.memberId}"> ${esc(m.nickname)} (ID: ${m.memberId})</label>`
+            ).join('')}
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" onclick="this.closest('.modal-overlay').remove()">취소</button>
+          <button class="btn btn-primary" onclick="confirmGroup(this)">생성</button>
+        </div>
+      </div>`;
+        }
+        document.body.appendChild(overlay);
+    }
+
+    async function confirmDm(btn) {
+        const overlay = btn.closest('.modal-overlay');
+        const targetId = overlay.querySelector('#dm-target').value;
+        const targetName = overlay.querySelector('#dm-target option:checked').textContent.split(' (')[0];
+        overlay.remove();
+        await startDmWith(Number(targetId), targetName);
+    }
+
+    async function confirmGroup(btn) {
+        const overlay = btn.closest('.modal-overlay');
+        const name = overlay.querySelector('#group-name').value.trim();
+        if (!name) return;
+        const checked = [...overlay.querySelectorAll('input[type=checkbox]:checked')].map(el => Number(el.value));
+        const memberIds = [currentUser.memberId, ...checked];
+        overlay.remove();
+        try {
+            const res = await fetch(`${BASE}/api/chat/rooms/group?name=${encodeURIComponent(name)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(memberIds)
+            });
+            if (res.ok) {
+                const room = await res.json();
+                openRoom(room.roomId, name, 'GROUP');
+                loadRooms();
+            }
+        } catch (e) {}
+    }
+
+    // ─── 유틸 ─────────────────────────────────────────────────────────────────────
+    function esc(str) {
+        return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+</script>
+</body>
+</html>
